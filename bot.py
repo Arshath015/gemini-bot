@@ -1,116 +1,96 @@
-import streamlit as st
-import os
+from flask import Flask, render_template, request, jsonify
+import google.generativeai as genai
+from datetime import datetime
 import time
-from dotenv import load_dotenv
-import google.generativeai as generativeai
-from rapid import fetch_product_details, convert_to_inr, extract_price, extract_relevant_offers  # Import from rapid.py
+import os
+from threading import Thread
 
-# Sidebar Component
-def st_sidebar():
-    with st.sidebar:
-        st.title("AI Chatbot")
-        st.text("Feel free to ask me anything!")
-        rate = st.slider("How much do you rate our App?", 0, 5, 0, step=1)
-        if rate > 0:
-            st.write("Thank you for your feedback! 😊")
-        # Mode selection for chatbot or product bot
-        mode = st.radio("Select Mode", ["Chatbot", "Product Bot"])
-        return mode
+app = Flask(__name__)
 
-# Function to display chat messages with improved UI
-def display_message(role, text):
-    """Display messages with distinct styles for User and Bot."""
-    
-    if role == "user":
-        color = "#0d6efd"  # Blue for user
-        align = "right"
-    else:
-        color = "#198754"  # Green for bot
-        align = "left"
+# Configure Gemini API
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', 'AIzaSyCIltxS9C-feeMo63TUy6CPaCZtCEn4aPo')
+genai.configure(api_key=GEMINI_API_KEY)
 
-    st.markdown(
-        f"""
-        <div style="display: flex; justify-content: {align}; margin: 5px 0;">
-            <div style="background-color: {color}; color: white; padding: 12px; 
-                        border-radius: 10px; max-width: 70%; font-size: 16px;">
-                <strong>{role.upper()}:</strong> {text}
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+# Set up the model
+generation_config = {
+    "temperature": 0.7,
+    "top_p": 1,
+    "top_k": 1,
+    "max_output_tokens": 2048,
+}
 
-# Chat Session Management for chatbot mode
-def session(session_key, user_prompt):
-    """Handle chat session and display user & bot messages properly."""
-    
-    for message in st.session_state[session_key].history:
-        role = "user" if message.role == "user" else "assistant"
-        message_text = message.parts[0].text
-        display_message(role, message_text)
+safety_settings = [
+    {
+        "category": "HARM_CATEGORY_HARASSMENT",
+        "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+    },
+    {
+        "category": "HARM_CATEGORY_HATE_SPEECH",
+        "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+    },
+    {
+        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+        "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+    },
+    {
+        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+        "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+    },
+]
 
-    if user_prompt:
-        display_message("user", user_prompt)
+model = genai.GenerativeModel(
+    model_name="gemini-1.5-flash",
+    generation_config=generation_config,
+    safety_settings=safety_settings
+)
 
-        # AI Response
-        try:
-            response = st.session_state[session_key].send_message(user_prompt)
-            if response.candidates:
-                assistant_text = response.candidates[0].content.parts[0].text
-                display_message("assistant", assistant_text)
-            else:
-                st.error("No valid response from AI.")
-        except Exception as e:
-            st.error(f"Error during AI response: {e}")
+# Chat history storage
+chat_history = {}
 
-# Product Bot to fetch product details
-def product_bot():
-    """Handle product-related queries and display product details."""
-    product_name = st.text_input("Enter the name of the product:")
-    
-    if product_name:
-        with st.spinner("Fetching product details..."):
-            product_details = fetch_product_details(product_name)
-            if product_details:
-                for product in product_details:
-                    st.markdown(f"**Product Name:** {product['name']}")
-                    st.markdown(f"**Price:** ₹{product['price_in_inr']}")
-                    st.markdown(f"**Offers:** {product['offers']}")
-                    st.markdown(f"[Buy here]({product['url']})")
-                    st.markdown("-" * 50)
-            else:
-                st.write("No product details found.")
+def get_chat_history(session_id):
+    if session_id not in chat_history:
+        chat_history[session_id] = model.start_chat(history=[])
+    return chat_history[session_id]
 
-# Main Function
-def main():
-    load_dotenv()
-    st.set_page_config(
-        page_title="AI Chatbot",
-        layout="wide",
-        initial_sidebar_state="expanded",
-    )
-    st.title("🤖 AI ChatBot using Google Gemini")
+def periodic_updates():
+    """Periodically clean up old chat sessions"""
+    while True:
+        time.sleep(3600)  # Run every hour
+        now = time.time()
+        # Cleanup logic can be added here if needed
 
-    # Load API key and configure Generative AI
-    Google_API_KEY = os.getenv("GOOGLE_API_KEY")
-    generativeai.configure(api_key=Google_API_KEY)
-    llm = generativeai.GenerativeModel("gemini-1.5-flash")
-    mode = st_sidebar()
+# Start the periodic update thread
+update_thread = Thread(target=periodic_updates)
+update_thread.daemon = True
+update_thread.start()
 
-    # Initialize chat session
-    if "chat_session" not in st.session_state:
-        st.session_state.chat_session = llm.start_chat(history=[])
+@app.route('/')
+def home():
+    return render_template('index.html')
 
-    # If in chatbot mode, proceed with Gemini chatbot logic
-    if mode == "Chatbot":
-        user_prompt = st.chat_input("Ask me anything...")
-        if user_prompt:
-            session("chat_session", user_prompt=user_prompt)
+@app.route('/chat', methods=['POST'])
+def chat():
+    try:
+        data = request.json
+        session_id = data.get('session_id', 'default')
+        message = data['message']
         
-    # If in product bot mode, fetch product details
-    elif mode == "Product Bot":
-        product_bot()
+        # Get or create chat session
+        chat_session = get_chat_history(session_id)
+        
+        # Send message to Gemini
+        response = chat_session.send_message(message)
+        
+        # Format response
+        bot_response = {
+            'text': response.text,
+            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        return jsonify(bot_response)
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
-# Run the main function
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)
