@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gemini Chatbot</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="chat-container">
+        <header class="chat-header">
+            <h1>Gemini Chatbot</h1>
+            <p>Powered by Google's Gemini API</p>
+        </header>
+        
+        <div class="chat-messages" id="chat-messages">
+            <!-- Messages will appear here -->
+        </div>
+        
+        <div class="chat-input">
+            <input type="text" id="user-input" placeholder="Type your message here..." autofocus>
+            <button id="send-button">Send</button>
+        </div>
+    </div>
+
+    <script>
+        // Generate a unique session ID
+        const sessionId = 'session-' + Math.random().toString(36).substr(2, 9);
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            const chatMessages = document.getElementById('chat-messages');
+            const userInput = document.getElementById('user-input');
+            const sendButton = document.getElementById('send-button');
+            
+            // Add welcome message
+            addBotMessage("Hello! I'm your Gemini assistant. How can I help you today?");
+            
+            // Handle send button click
+            sendButton.addEventListener('click', sendMessage);
+            
+            // Handle Enter key press
+            userInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    sendMessage();
+                }
+            });
+            
+            function sendMessage() {
+                const message = userInput.value.trim();
+                if (message) {
+                    // Add user message to chat
+                    addUserMessage(message);
+                    userInput.value = '';
+                    
+                    // Show typing indicator
+                    const typingIndicator = document.createElement('div');
+                    typingIndicator.className = 'message bot-message typing';
+                    typingIndicator.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
+                    chatMessages.appendChild(typingIndicator);
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                    
+                    // Send message to server
+                    fetch('/chat', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            session_id: sessionId,
+                            message: message
+                        })
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        // Remove typing indicator
+                        chatMessages.removeChild(typingIndicator);
+                        
+                        if (data.error) {
+                            addBotMessage("Sorry, I encountered an error: " + data.error);
+                        } else {
+                            addBotMessage(data.text);
+                        }
+                    })
+                    .catch(error => {
+                        chatMessages.removeChild(typingIndicator);
+                        addBotMessage("Sorry, there was a problem connecting to the server.");
+                        console.error('Error:', error);
+                    });
+                }
+            }
+            
+            function addUserMessage(text) {
+                const messageElement = document.createElement('div');
+                messageElement.className = 'message user-message';
+                messageElement.innerHTML = `
+                    <div class="message-content">
+                        <div class="message-text">${escapeHtml(text)}</div>
+                        <div class="message-time">${new Date().toLocaleTimeString()}</div>
+                    </div>
+                `;
+                chatMessages.appendChild(messageElement);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            }
+            
+            function addBotMessage(text) {
+                const messageElement = document.createElement('div');
+                messageElement.className = 'message bot-message';
+                messageElement.innerHTML = `
+                    <div class="message-content">
+                        <div class="message-text">${formatBotResponse(text)}</div>
+                        <div class="message-time">${new Date().toLocaleTimeString()}</div>
+                    </div>
+                `;
+                chatMessages.appendChild(messageElement);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            }
+            
+            function escapeHtml(unsafe) {
+                return unsafe
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;")
+                    .replace(/'/g, "&#039;");
+            }
+            
+            function formatBotResponse(text) {
+                // Simple formatting for links and lists
+                let formatted = escapeHtml(text);
+                // Convert markdown links to HTML
+                formatted = formatted.replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank">$1</a>');
+                // Convert **bold** to <strong>
+                formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+                // Convert *italic* to <em>
+                formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>');
+                // Convert newlines to <br>
+                formatted = formatted.replace(/\n/g, '<br>');
+                return formatted;
+            }
+        });
+    </script>
+</body>
+</html>
